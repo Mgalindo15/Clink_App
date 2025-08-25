@@ -1,13 +1,17 @@
 from fastapi import FastAPI, HTTPException, status
+from contextlib import asynccontextmanager
 from datetime import datetime
 from db import init_db, get_conn
 from models import ProfileCreate, ProfilePublic, compute_age_band, utc_now_iso
 
-app = FastAPI(title="Clink Lab", version="0.0.1")
-
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- startup ---
     init_db()
+    yield
+    # --- shutdown ---
+
+app = FastAPI(title="Clink Lab", version="0.0.1", lifespan=lifespan)
 
 @app.get("/health")
 def health():
