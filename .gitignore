@@ -1,2 +1,5 @@
 .venv/
 master_doc.md
+clink-db
+clink-db-shm
+clink-db-wal
