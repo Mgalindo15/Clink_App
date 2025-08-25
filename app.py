@@ -1,8 +1,10 @@
-from fastapi import FastAPI, HTTPException, status
+import os, json
+from fastapi import FastAPI, HTTPException, status, Header
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 from db import init_db, get_conn
-from models import ProfileCreate, ProfilePublic, compute_age_band, utc_now_iso
+from models import ProfileCreate, ProfilePublic, ProfilePII, SnapShotOut, compute_age_band, utc_now_iso
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -10,6 +12,7 @@ async def lifespan(app: FastAPI):
     init_db()
     yield
     # --- shutdown ---
+    # blah blah
 
 app = FastAPI(title="Clink Lab", version="0.0.1", lifespan=lifespan)
 
@@ -97,3 +100,155 @@ def create_profile(payload: ProfileCreate):
         consent_ok=payload.consent_ok,
         guardian_required=guardian_required,
     )
+
+@app.get("/profiles/{profile_id}", response_model=ProfilePublic)
+def get_profile(profile_id: int):
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+              profile_id, schema_version, created_at, updated_at,
+              age_band, education_level, employment_status, sex, gender,
+              locale, consent_ok, guardian_required
+            FROM profiles
+            WHERE profile_id = ?
+            """,
+            (profile_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Profile not found.")
+
+        # Make sure runns conn() --> rows can be read as dicts
+        return ProfilePublic(
+            profile_id=row["profile_id"],
+            schema_version=row["schema_version"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            age_band=row["age_band"],
+            education_level=row["education_level"],
+            employment_status=row["employment_status"],
+            sex=row["sex"],
+            gender=row["gender"],
+            locale=row["locale"],
+            consent_ok=bool(row["consent_ok"]),
+            guardian_required=bool(row["guardian_required"]),
+        )
+
+
+@app.get("/profiles/{profile_id}/pii", response_model=ProfilePII)
+def get_profile_pii(
+    profile_id: int,
+    # --- Validation ---> replace later w/ real auth
+    #x_dev_key: Optional[str] = Header(default=None),
+):
+    """
+    expected = os.environ.get("DEV_PII_KEY", "").strip()
+    if not expected or (x_dev_key or "").strip() != expected:
+        raise HTTPException(status_code=403, detail="PII access denied (missing/invalid dev key).")
+    """
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT p.profile_id, pr.display_name, pr.dob
+            FROM profiles p
+            JOIN profiles_private pr ON pr.ppi_profile_id = p.profile_id
+            WHERE p.profile_id = ?
+            """,
+            (profile_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="PII record not found.")
+
+        # dob comes as str (YYYY-MM-DD), pydantic will coerce to 'date'
+        return {
+            "profile_id": row["profile_id"],
+            "display_name": row["display_name"],
+            "dob": row["dob"],
+        }
+
+@app.get("/profiles/{profile_id}/snapshot", response_model=dict)
+def get_snapshot(profile_id: int, rebuild: bool = False):
+    """
+    Dev-friendly snapshot:
+      - If exists and rebuild==False → return existing
+      - Else (re)build a compact snapshot from the current row
+    """
+    snapshot_type = "chat_snapshot"
+    now = utc_now_iso()
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # Try existing
+        if not rebuild:
+            cur.execute(
+                """
+                SELECT json_blob, last_built_at, etag
+                FROM snapshots
+                WHERE snapshots_profile_id = ? AND snapshot_type = ?
+                """,
+                (profile_id, snapshot_type),
+            )
+            snap = cur.fetchone()
+            if snap:
+                try:
+                    parsed = json.loads(snap["json_blob"])
+                except Exception:
+                    parsed = {"_corrupt": True, "raw": snap["json_blob"]}
+                return {
+                    "profile_id": profile_id,
+                    "snapshot_type": snapshot_type,
+                    "last_built_at": snap["last_built_at"],
+                    "etag": snap["etag"],
+                    "json": parsed,
+                }
+
+        # Build from live profile row
+        cur.execute(
+            """
+            SELECT schema_version, age_band, education_level, guardian_required
+            FROM profiles
+            WHERE profile_id = ?
+            """,
+            (profile_id,), 
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Profile not found.")
+
+        snapshot = {
+            "meta": {"schema_version": row["schema_version"]},
+            "demographics": {
+                "age_band": row["age_band"],
+                "education_level": row["education_level"],
+            },
+            "flags": {"guardian_required": bool(row["guardian_required"])},
+        }
+
+        # Upsert snapshot
+        etag = f"onread-v1-{now}"
+        cur.execute(
+            """
+            INSERT INTO snapshots (snapshots_profile_id, snapshot_type, json_blob, last_built_at, etag)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(snapshots_profile_id, snapshot_type)
+            DO UPDATE SET
+              json_blob = excluded.json_blob,
+              last_built_at = excluded.last_built_at,
+              etag = excluded.etag
+            """,
+            (profile_id, snapshot_type, json.dumps(snapshot), now, etag),
+        )
+        conn.commit()
+
+        return {
+            "profile_id": profile_id,
+            "snapshot_type": snapshot_type,
+            "last_built_at": now,
+            "etag": etag,
+            "json": snapshot,
+        }

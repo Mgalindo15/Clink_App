@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 AgeBand = Literal["13_17", "18_25", "26_39", "40_plus"]
@@ -65,3 +65,16 @@ class ProfilePublic(BaseModel):
     locale: str
     consent_ok: bool
     guardian_required: bool
+
+class ProfilePII(BaseModel):
+    profile_id: int
+    display_name: str
+    dob: date
+
+class SnapShotOut(BaseModel):
+    profile_id: int
+    snapshot_type: str
+    last_built_at: str
+    etag: str
+    json: Dict[str, Any]
+    
