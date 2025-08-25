@@ -1,0 +1,22 @@
+# REQ
+
+http POST :8000/profiles \
+  display_name="Turner Phillips" \
+  dob="2011-06-15" \
+  education_level="middle_school" \
+  sex="male" \
+  gender="" \
+  locale="en-US" \
+  consent_ok:=false
+
+# RES
+
+HTTP/1.1 400 Bad Request
+content-length: 53
+content-type: application/json
+date: Mon, 25 Aug 2025 05:46:25 GMT
+server: uvicorn
+
+{
+    "detail": "consent is required to create a profile."
+}

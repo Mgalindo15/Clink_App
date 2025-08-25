@@ -1,0 +1,22 @@
+# REQ
+
+http POST :8000/profiles \
+  display_name="Turner Phillips" \
+  dob="2019-06-15" \
+  education_level="middle_school" \
+  sex="male" \
+  gender="" \
+  locale="en-US" \
+  consent_ok:=true
+
+# RES
+  
+HTTP/1.1 400 Bad Request
+content-length: 48
+content-type: application/json
+date: Mon, 25 Aug 2025 05:44:49 GMT
+server: uvicorn
+
+{
+    "detail": "User must be at least 13 years old."
+}
