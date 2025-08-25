@@ -15,9 +15,14 @@ Sex = Literal["male", "female"]
 
 def compute_age_band(dob: date) -> AgeBand:
     today = date.today()
-    years = today.year - dob.year - ((today.month, today.say) < (dob.month, dob.day))
-    if years <= 0 or years >= 120:
-        raise ValueError("Please Enter A Valid Date of Birth")
+
+    # guard: future/bogus DOBs
+    if dob > today:
+        raise ValueError("Date of birth cannot be in the future.")
+
+    years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+    if years < 0 or years > 120:
+        raise ValueError("Please enter a valid date of birth.")
     if years < 13:
         raise ValueError("User must be at least 13 years old.")
     if years <= 17:
@@ -26,30 +31,30 @@ def compute_age_band(dob: date) -> AgeBand:
         return "18_25"
     if years <= 39:
         return "26_39"
-    else:
-        return "40_plus"
-    
-def uts_now_iso() -> str:
-    return datetime.nw(timezone.utc).isoformat().replace("+00.00", "Z")
+    return "40_plus"
+
+def utc_now_iso() -> str:
+    # e.g., "2025-08-24T21:07:12.345Z"
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 class ProfileCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=50)
     dob: date
-    education_level : EducationLevel
+    education_level: EducationLevel
     employment_status: Optional[str] = None
     sex: Sex
     gender: Optional[str] = None
-    locale: str = Field(min_lenth=2, max_lenth=20)
-    consent_ok = bool
+    locale: str = Field(min_length=2, max_length=20)
+    consent_ok: bool
 
     @field_validator("display_name")
     @classmethod
     def normalize_name(cls, v: str) -> str:
         return " ".join(v.strip().split())
-    
+
 class ProfilePublic(BaseModel):
     profile_id: int
-    schema_versaion: str
+    schema_version: str
     created_at: str
     updated_at: str
     age_band: AgeBand
