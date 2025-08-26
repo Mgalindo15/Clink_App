@@ -5,3 +5,4 @@ clink-db-shm
 clink-db-wal
 notes.txt
 token.txt
+.webui_secret_key
