@@ -48,9 +48,9 @@ class ProfileCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=50)
     dob: date
     education_level: EducationLevel
-    employment_status: Optional[str] = None
+    employment_status: Optional[EmploymentStatus]
     sex: Sex
-    gender: Optional[EmploymentStatus] = None
+    gender: Optional[str] = None
     locale: str = Field(min_length=2, max_length=20, pattern=r"^[a-z]{2}-[A-Z]{2}$")
     consent_ok: bool
 

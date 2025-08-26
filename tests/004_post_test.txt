@@ -13,3 +13,8 @@ TOKEN=$(<token.txt)
 
 http GET :8000/me Authorization:"Bearer $TOKEN"
 # Success
+
+New run w/ cookie -->
+http --session=clink POST :8000/login username=mattyg224 password=secret123
+=clink GET :8000/me
+# Success

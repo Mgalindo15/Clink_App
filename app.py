@@ -1,6 +1,8 @@
 import os, json
-from fastapi import FastAPI, HTTPException, status, Header, Depends
+from fastapi import FastAPI, HTTPException, status, Header, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.security.utils import get_authorization_scheme_param
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from passlib.context import CryptContext
 from jose import jwt, JWTError
@@ -26,7 +28,7 @@ def health():
 
 # ----- SECURITY -----
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
 
 # Check Esmerald WF for PROD
 SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret")
@@ -45,15 +47,41 @@ def create_access_token(data: dict, expires_delta: int=ACCESS_TOKEN_EXPIRE_MINUT
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-def get_current_user(token: str = Depends(oauth2_scheme)):
+def get_current_user(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    token_from_oauth: str | None = Depends(oauth2_scheme),
+) -> str:
+    token: str | None = None
+
+    # 1) Prefer explicit OAuth2 bearer (if provided)
+    if token_from_oauth:
+        token = token_from_oauth
+
+    # 2) Else parse Authorization header
+    if not token and authorization:
+        scheme, param = get_authorization_scheme_param(authorization)
+        if scheme.lower() == "bearer" and param:
+            token = param
+
+    # 3) Else fall back to cookie
+    if not token:
+        token = request.cookies.get("access_token")
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid credentials")
-        return username
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    username = payload.get("sub")
+    if not isinstance(username, str) or not username:
+        # This prevents returning None → {"username": null}
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    return username
 
 # ----- ROUTES -----
 @app.post("/register", response_model=dict)
@@ -85,7 +113,9 @@ def login_user(payload: UserLogin):
             raise HTTPException(status_code=401, detail="Invalid credentials")
         
         token = create_access_token({"sub": payload.username})
-        return {"access_token": token, "token_type": "bearer"}
+        response = JSONResponse(content={"access_token": token, "token_type": "bearer"})
+        response.set_cookie(key="access_token", value=token, httponly=True)
+        return response
 
 @app.post("/profiles", response_model=ProfilePublic, status_code=status.HTTP_201_CREATED)
 def create_profile(payload: ProfileCreate):
@@ -169,8 +199,8 @@ def create_profile(payload: ProfileCreate):
     )
 
 @app.get("/me")
-def read_users_me(username: str = Depends(get_current_user)):
-    return {"username": username}
+def read_users_me(current_user: str = Depends(get_current_user)):
+    return {"username": current_user}
 
 @app.get("/profiles", response_model=List[ProfilePublic])
 def list_profiles(
