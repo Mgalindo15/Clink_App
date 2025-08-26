@@ -39,6 +39,16 @@ CREATE TABLE IF NOT EXISTS profiles_private (
     FOREIGN KEY(ppi_profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
 
+-- Auth (tri-linked with profiles/private)
+CREATE TABLE IF NOT EXISTS auth_users (
+    user_id             INTEGER PRIMARY KEY,
+    username            TEXT NOT NULL UNIQUE,
+    password_hash       TEXT NOT NULL,
+    auth_profile_id     INTEGER NOT NULL,
+    created_at          TEXT NOT NULL,
+    FOREIGN KEY(auth_profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
+);
+
 -- Evidence Log (Append Only) -> tracks changes in profile (JSON), allowing traceability, debugging, auditing
 CREATE TABLE IF NOT EXISTS evidence_log (
     id                  INTEGER PRIMARY KEY,

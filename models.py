@@ -2,7 +2,9 @@ from datetime import date, datetime, timezone
 from typing import Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
+# --- GLOBALS ---
 AgeBand = Literal["13_17", "18_25", "26_39", "40_plus"]
+Sex = Literal["male", "female"]
 EducationLevel = Literal[
     "middle_school",
     "high_school",
@@ -19,8 +21,8 @@ EmploymentStatus = Literal[
     "self_employed",
     "retired",
 ]
-Sex = Literal["male", "female"]
 
+# --- FUNCTIONS ---
 def compute_age_band(dob: date) -> AgeBand:
     today = date.today()
 
@@ -41,6 +43,7 @@ def utc_now_iso() -> str:
     # e.g., "2025-08-24T21:07:12.345Z"
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
+# --- SCHEMAS ---
 class ProfileCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=50)
     dob: date
@@ -70,18 +73,6 @@ class ProfilePublic(BaseModel):
     consent_ok: bool
     guardian_required: bool
 
-class ProfilePII(BaseModel):
-    profile_id: int
-    display_name: str
-    dob: date
-
-class SnapShotOut(BaseModel):
-    profile_id: int
-    snapshot_type: str
-    last_built_at: str
-    etag: str
-    json: Dict[str, Any]
-
 class ProfileUpdate(BaseModel):
     education_level: Optional[EducationLevel] = None
     employment_status: Optional[EmploymentStatus] = None
@@ -90,6 +81,31 @@ class ProfileUpdate(BaseModel):
     locale: Optional[str] = Field(None, pattern=r"^[a-z]{2}-[A-Z]{2}$")
     consent_ok: Optional[bool] = None
 
+class ProfilePII(BaseModel):
+    profile_id: int
+    display_name: str
+    dob: date
+
 class ProfilePIIUpdate(BaseModel):
     display_name: Optional[str] = Field(None, min_length=1, max_length=50)
     dob: Optional[date] = None
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=6, max_length=30)
+    password: str = Field(min_Length=8, max_length=128)
+    profile_id: int
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+
+class SnapShotOut(BaseModel):
+    profile_id: int
+    snapshot_type: str
+    last_built_at: str
+    etag: str
+    data: Dict[str, Any]

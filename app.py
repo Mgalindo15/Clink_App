@@ -1,11 +1,15 @@
 import os, json
-from fastapi import FastAPI, HTTPException, status, Header
+from fastapi import FastAPI, HTTPException, status, Header, Depends
+from fastapi.security import OAuth2PasswordBearer
 from contextlib import asynccontextmanager
-from datetime import datetime
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from db import init_db, get_conn
-from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, compute_age_band, utc_now_iso
+from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, UserCreate, UserLogin, TokenOut, compute_age_band, utc_now_iso
 
+# ----- DB INIT -----
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -19,6 +23,68 @@ app = FastAPI(title="Clink Lab", version="0.0.1", lifespan=lifespan)
 @app.get("/health")
 def health():
     return {"status": "ok", "ts": datetime.utcnow().isoformat() + "Z"}
+
+# ----- SECURITY -----
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+# Check Esmerald WF for PROD
+SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 120
+
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(password: str, hash_: str) -> bool:
+    return pwd_context.verify(password, hash_)
+
+def create_access_token(data: dict, expires_delta: int=ACCESS_TOKEN_EXPIRE_MINUTES):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_delta)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        return username
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+# ----- ROUTES -----
+@app.post("/register", response_model=dict)
+def register_user(payload: UserCreate):
+    now = utc_now_iso()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """
+                INSERT INTO auth_users (username, password_hash, profile_id, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise HTTPException(status_code=400, detail="Username already exists or profile missing")
+    return {"msg": "User registered"}
+
+@app.post("/login", response_model=TokenOut)
+def login_user(payload: UserLogin):
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT password_has FROM auth_users WHERE username = ?", (payload.username),)
+        row = cur.fetchone()
+        if not row or not verify_password(payload.password, row["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        token = create_access_token({"sub": payload.username})
+        return {"access_token": token, "token_type": "bearer"}
 
 @app.post("/profiles", response_model=ProfilePublic, status_code=status.HTTP_201_CREATED)
 def create_profile(payload: ProfileCreate):
@@ -101,41 +167,10 @@ def create_profile(payload: ProfileCreate):
         guardian_required=guardian_required,
     )
 
-@app.get("/profiles/{profile_id}", response_model=ProfilePublic)
-def get_profile(profile_id: int):
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-              profile_id, schema_version, created_at, updated_at,
-              age_band, education_level, employment_status, sex, gender,
-              locale, consent_ok, guardian_required
-            FROM profiles
-            WHERE profile_id = ?
-            """,
-            (profile_id,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Profile not found.")
+@app.get("/me")
+def read_users_me(username: str = Depends(get_current_user)):
+    return {"username": username}
 
-        # Make sure runns conn() --> rows can be read as dicts
-        return ProfilePublic(
-            profile_id=row["profile_id"],
-            schema_version=row["schema_version"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            age_band=row["age_band"],
-            education_level=row["education_level"],
-            employment_status=row["employment_status"],
-            sex=row["sex"],
-            gender=row["gender"],
-            locale=row["locale"],
-            consent_ok=bool(row["consent_ok"]),
-            guardian_required=bool(row["guardian_required"]),
-        )
-    
 @app.get("/profiles", response_model=List[ProfilePublic])
 def list_profiles(
     age_band: Optional[str] = None,
@@ -176,6 +211,117 @@ def list_profiles(
         )
         for row in rows
     ]
+
+@app.get("/profiles/{profile_id}", response_model=ProfilePublic)
+def get_profile(profile_id: int):
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+              profile_id, schema_version, created_at, updated_at,
+              age_band, education_level, employment_status, sex, gender,
+              locale, consent_ok, guardian_required
+            FROM profiles
+            WHERE profile_id = ?
+            """,
+            (profile_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Profile not found.")
+
+        # Make sure runns conn() --> rows can be read as dicts
+        return ProfilePublic(
+            profile_id=row["profile_id"],
+            schema_version=row["schema_version"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            age_band=row["age_band"],
+            education_level=row["education_level"],
+            employment_status=row["employment_status"],
+            sex=row["sex"],
+            gender=row["gender"],
+            locale=row["locale"],
+            consent_ok=bool(row["consent_ok"]),
+            guardian_required=bool(row["guardian_required"]),
+        )
+    
+@app.get("/profiles/{profile_id}/pii", response_model=ProfilePII)
+def get_profile_pii(
+    profile_id: int,
+    # --- Validation ---> replace later w/ real auth
+    #x_dev_key: Optional[str] = Header(default=None),
+):
+    """
+    expected = os.environ.get("DEV_PII_KEY", "").strip()
+    if not expected or (x_dev_key or "").strip() != expected:
+        raise HTTPException(status_code=403, detail="PII access denied (missing/invalid dev key).")
+    """
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT p.profile_id, pr.display_name, pr.dob
+            FROM profiles p
+            JOIN profiles_private pr ON pr.ppi_profile_id = p.profile_id
+            WHERE p.profile_id = ?
+            """,
+            (profile_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="PII record not found.")
+
+        # dob comes as str (YYYY-MM-DD), pydantic will coerce to 'date'
+        return {
+            "profile_id": row["profile_id"],
+            "display_name": row["display_name"],
+            "dob": row["dob"],
+        }
+    
+@app.put("/profiles/{profile_id}", response_model=ProfilePublic)
+def update_profile(profile_id: int, payload: ProfileUpdate):
+    now = utc_now_iso()
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    set_clauses = ", ".join([f"{col} = ?" for col in updates])
+    params = list(updates.values())
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM profiles WHERE profile_id = ?", (profile_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Profile not found.")
+
+        cur.execute(
+            f"UPDATE profiles SET {set_clauses}, updated_at = ? WHERE profile_id = ?",
+            (*params, now, profile_id),
+        )
+
+        # Evidence log
+        cur.execute(
+            """
+            INSERT INTO evidence_log (log_profile_id, ts, source, delta_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                profile_id,
+                now,
+                "update_profile",
+                json.dumps({"updated": updates}),
+            ),
+        )
+
+        conn.commit()
+
+    # Reuse existing get_profile to return updated object
+    return get_profile(profile_id)
+    
+
 
 @app.get("/profiles/{profile_id}/history", response_model=List[dict])
 def get_profile_history(profile_id: int):
@@ -239,39 +385,6 @@ def get_profile_debug(
     
     return out
     
-
-@app.get("/profiles/{profile_id}/pii", response_model=ProfilePII)
-def get_profile_pii(
-    profile_id: int,
-    # --- Validation ---> replace later w/ real auth
-    #x_dev_key: Optional[str] = Header(default=None),
-):
-    """
-    expected = os.environ.get("DEV_PII_KEY", "").strip()
-    if not expected or (x_dev_key or "").strip() != expected:
-        raise HTTPException(status_code=403, detail="PII access denied (missing/invalid dev key).")
-    """
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT p.profile_id, pr.display_name, pr.dob
-            FROM profiles p
-            JOIN profiles_private pr ON pr.ppi_profile_id = p.profile_id
-            WHERE p.profile_id = ?
-            """,
-            (profile_id,),
-        )
-        row = cur.fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="PII record not found.")
-
-        # dob comes as str (YYYY-MM-DD), pydantic will coerce to 'date'
-        return {
-            "profile_id": row["profile_id"],
-            "display_name": row["display_name"],
-            "dob": row["dob"],
-        }
 
 @app.get("/profiles/{profile_id}/snapshot", response_model=dict)
 def get_snapshot(profile_id: int, rebuild: bool = False):
@@ -356,46 +469,7 @@ def get_snapshot(profile_id: int, rebuild: bool = False):
             "json": snapshot,
         }
 
-@app.put("/profiles/{profile_id}", response_model=ProfilePublic)
-def update_profile(profile_id: int, payload: ProfileUpdate):
-    now = utc_now_iso()
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update.")
 
-    set_clauses = ", ".join([f"{col} = ?" for col in updates])
-    params = list(updates.values())
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM profiles WHERE profile_id = ?", (profile_id,))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Profile not found.")
-
-        cur.execute(
-            f"UPDATE profiles SET {set_clauses}, updated_at = ? WHERE profile_id = ?",
-            (*params, now, profile_id),
-        )
-
-        # Evidence log
-        cur.execute(
-            """
-            INSERT INTO evidence_log (log_profile_id, ts, source, delta_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                profile_id,
-                now,
-                "update_profile",
-                json.dumps({"updated": updates}),
-            ),
-        )
-
-        conn.commit()
-
-    # Reuse existing get_profile to return updated object
-    return get_profile(profile_id)
 
 @app.patch("/profiles/{profile_id}/pii", response_model=ProfilePII)
 def update_profile_pii(
