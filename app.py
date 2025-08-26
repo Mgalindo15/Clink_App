@@ -26,7 +26,7 @@ def health():
 
 # ----- SECURITY -----
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 # Check Esmerald WF for PROD
 SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret")
@@ -64,9 +64,10 @@ def register_user(payload: UserCreate):
         try:
             cur.execute(
                 """
-                INSERT INTO auth_users (username, password_hash, profile_id, created_at)
+                INSERT INTO auth_users (username, password_hash, auth_profile_id, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
+                (payload.username, hash_password(payload.password), payload.profile_id, now),
             )
             conn.commit()
         except Exception:
@@ -78,7 +79,7 @@ def register_user(payload: UserCreate):
 def login_user(payload: UserLogin):
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT password_has FROM auth_users WHERE username = ?", (payload.username),)
+        cur.execute("SELECT password_hash FROM auth_users WHERE username = ?", (payload.username,))
         row = cur.fetchone()
         if not row or not verify_password(payload.password, row["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid credentials")

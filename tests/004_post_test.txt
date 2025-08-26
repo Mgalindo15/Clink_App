@@ -1,0 +1,15 @@
+http POST :8000/register username="mattyg224" password="secret123" profile_id:=1
+# Success
+
+http POST :8000/login username="mattyg224" password="secret123"
+# Success
+
+http GET :8000/me Authorization:"Bearer $TOKEN"
+--> Need to run jq (see below)
+
+http POST :8000/login username="mattyg224" password="secret123" | jq -r 'access_token' > token.txt
+
+TOKEN=$(<token.txt)
+
+http GET :8000/me Authorization:"Bearer $TOKEN"
+# Success
