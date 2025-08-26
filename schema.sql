@@ -14,10 +14,19 @@ CREATE TABLE IF NOT EXISTS profiles (
                             CHECK (age_band IN ('13_17', '18_25', '26_39', '40_plus')),
     education_level     TEXT NOT NULL 
                             CHECK (education_level IN ('middle_school', 'high_school', 'community_college', 'trade_school', 'university_or_four_year_college', 'graduate_school')),
-    employment_status   TEXT,
+    employment_status   TEXT
+                            CHECK (employment_status IN (
+                                'student',
+                                'unemployed',
+                                'part-time',
+                                'full-time',
+                                'self-employed',
+                                'retired'
+                            )),
     sex                 TEXT NOT NULL CHECK (sex IN ('male', 'female')),
     gender              TEXT,
-    locale              TEXT NOT NULL,
+    locale              TEXT NOT NULL
+                            CHECK (locale GLOB '[a-z][a-z]-[A-Z][A-Z]'),
     consent_ok          INTEGER NOT NULL CHECK (consent_ok IN (0, 1)),
     guardian_required   INTEGER NOT NULL CHECK (guardian_required IN (0, 1))
 );

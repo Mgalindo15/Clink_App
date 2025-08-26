@@ -11,14 +11,18 @@ EducationLevel = Literal[
     "university_or_four_year_college",
     "graduate_school",
 ]
+EmploymentStatus = Literal[
+    "student",
+    "unemployed",
+    "part_time",
+    "full_time",
+    "self_employed",
+    "retired",
+]
 Sex = Literal["male", "female"]
 
 def compute_age_band(dob: date) -> AgeBand:
     today = date.today()
-
-    # guard: future/bogus DOBs
-    if dob > today:
-        raise ValueError("Date of birth cannot be in the future.")
 
     years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     if years < 0 or years > 120:
@@ -43,8 +47,8 @@ class ProfileCreate(BaseModel):
     education_level: EducationLevel
     employment_status: Optional[str] = None
     sex: Sex
-    gender: Optional[str] = None
-    locale: str = Field(min_length=2, max_length=20)
+    gender: Optional[EmploymentStatus] = None
+    locale: str = Field(min_length=2, max_length=20, pattern=r"^[a-z]{2}-[A-Z]{2}$")
     consent_ok: bool
 
     @field_validator("display_name")
@@ -59,7 +63,7 @@ class ProfilePublic(BaseModel):
     updated_at: str
     age_band: AgeBand
     education_level: EducationLevel
-    employment_status: Optional[str] = None
+    employment_status: Optional[EmploymentStatus] = None
     sex: Sex
     gender: Optional[str] = None
     locale: str
@@ -77,4 +81,15 @@ class SnapShotOut(BaseModel):
     last_built_at: str
     etag: str
     json: Dict[str, Any]
-    
+
+class ProfileUpdate(BaseModel):
+    education_level: Optional[EducationLevel] = None
+    employment_status: Optional[EmploymentStatus] = None
+    sex: Optional[Sex] = None
+    gender: Optional[str] = None
+    locale: Optional[str] = Field(None, pattern=r"^[a-z]{2}-[A-Z]{2}$")
+    consent_ok: Optional[bool] = None
+
+class ProfilePIIUpdate(BaseModel):
+    display_name: Optional[str] = Field(None, min_length=1, max_length=50)
+    dob: Optional[date] = None

@@ -12,3 +12,24 @@ http :8000/profiles/1/history
 
 http :8000/profiles/1/debug
 # Success
+
+# ------- ERROR TESTING -------- #
+
+http POST :8000/profiles \
+  display_name="Bad Example" \
+  dob="2000-05-05" \
+  education_level="graduate_school" \
+  employment_status="wizard" \
+  sex="female" \
+  locale="en-US" \
+  consent_ok:=true
+# Success
+
+http POST :8000/profiles \
+  display_name="Bad Locale" \
+  dob="2000-05-05" \
+  education_level="graduate_school" \
+  sex="female" \
+  locale="english_US" \
+  consent_ok:=true
+# Success

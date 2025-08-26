@@ -2,9 +2,9 @@ import os, json
 from fastapi import FastAPI, HTTPException, status, Header
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from db import init_db, get_conn
-from models import ProfileCreate, ProfilePublic, ProfilePII, SnapShotOut, compute_age_band, utc_now_iso
+from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, compute_age_band, utc_now_iso
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -135,7 +135,110 @@ def get_profile(profile_id: int):
             consent_ok=bool(row["consent_ok"]),
             guardian_required=bool(row["guardian_required"]),
         )
+    
+@app.get("/profiles", response_model=List[ProfilePublic])
+def list_profiles(
+    age_band: Optional[str] = None,
+    education_level: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0,
+):
+    query = "SELECT * FROM profiles WHERE 1=1"
+    params = []
+    if age_band:
+        query += " AND age_band = ?"
+        params.append(age_band)
+    if education_level:
+        query += " AND education_level = ?"
+        params.append(education_level)
+    query += " ORDER BY profile_id LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
 
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(query, params)
+        rows = cur.fetchall()
+
+    return [
+        ProfilePublic(
+            profile_id=row["profile_id"],
+            schema_version=row["schema_version"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            age_band=row["age_band"],
+            education_level=row["education_level"],
+            employment_status=row["employment_status"],
+            sex=row["sex"],
+            gender=row["gender"],
+            locale=row["locale"],
+            consent_ok=bool(row["consent_ok"]),
+            guardian_required=bool(row["guardian_required"]),
+        )
+        for row in rows
+    ]
+
+@app.get("/profiles/{profile_id}/history", response_model=List[dict])
+def get_profile_history(profile_id: int):
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, ts, source, delta_json
+            FROM evidence_log
+            WHERE log_profile_id = ?
+            ORDER BY id DESC
+            """,
+            (profile_id,),
+        )
+        rows = cur.fetchall()
+
+    return [
+        {
+            "id": row["id"],
+            "ts": row["ts"],
+            "source": row["source"],
+            "delta": json.loads(row["delta_json"]),
+        }
+        for row in rows
+    ]
+
+@app.get("/profiles/{profile_id}/debug", response_model=dict)
+def get_profile_debug(
+    profile_id: int,
+    #dev key
+):
+    # if gating for pii/non-pii split w/ dev key requirement (later)
+    out = {}
+    out["profile"] = get_profile(profile_id)
+
+    # snapshot
+    out["snapshot"] = get_snapshot(profile_id)
+
+    # evidence history
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, ts, source, delta_json
+            FROM evidence_log
+            WHERE log_profile_id = ?
+            ORDER BY id DESC LIMIT 5
+            """,
+            (profile_id,),
+        )
+        rows = cur.fetchall()
+        out["evidence"] = [
+            {
+                "id": r["id"],
+                "ts": r["ts"],
+                "source": r["source"],
+                "delta": json.loads(r["delta_json"]),
+            }
+            for r in rows
+        ]
+    
+    return out
+    
 
 @app.get("/profiles/{profile_id}/pii", response_model=ProfilePII)
 def get_profile_pii(
@@ -252,3 +355,92 @@ def get_snapshot(profile_id: int, rebuild: bool = False):
             "etag": etag,
             "json": snapshot,
         }
+
+@app.put("/profiles/{profile_id}", response_model=ProfilePublic)
+def update_profile(profile_id: int, payload: ProfileUpdate):
+    now = utc_now_iso()
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    set_clauses = ", ".join([f"{col} = ?" for col in updates])
+    params = list(updates.values())
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM profiles WHERE profile_id = ?", (profile_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Profile not found.")
+
+        cur.execute(
+            f"UPDATE profiles SET {set_clauses}, updated_at = ? WHERE profile_id = ?",
+            (*params, now, profile_id),
+        )
+
+        # Evidence log
+        cur.execute(
+            """
+            INSERT INTO evidence_log (log_profile_id, ts, source, delta_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                profile_id,
+                now,
+                "update_profile",
+                json.dumps({"updated": updates}),
+            ),
+        )
+
+        conn.commit()
+
+    # Reuse existing get_profile to return updated object
+    return get_profile(profile_id)
+
+@app.patch("/profiles/{profile_id}/pii", response_model=ProfilePII)
+def update_profile_pii(
+    profile_id: int,
+    payload: ProfilePIIUpdate,
+    x_dev_key: Optional[str] = Header(default=None),
+):
+    expected = os.environ.get("DEV_PII_KEY", "").strip()
+    if not expected or (x_dev_key or "").strip() != expected:
+        raise HTTPException(status_code=403, detail="PII access denied (missing/invalid dev key).")
+
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    now = utc_now_iso()
+
+    set_clauses = ", ".join([f"{col} = ?" for col in updates])
+    params = list(updates.values())
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM profiles_private WHERE ppi_profile_id = ?", (profile_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="PII record not found.")
+
+        cur.execute(
+            f"UPDATE profiles_private SET {set_clauses} WHERE ppi_profile_id = ?",
+            (*params, profile_id),
+        )
+
+        cur.execute(
+            """
+            INSERT INTO evidence_log (log_profile_id, ts, source, delta_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                profile_id,
+                now,
+                "update_profile_pii",
+                json.dumps({"updated": updates}),
+            ),
+        )
+
+        conn.commit()
+
+    # Return updated PII
+    return get_profile_pii(profile_id, x_dev_key)

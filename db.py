@@ -12,5 +12,5 @@ def get_conn() -> sqlite3.Connection:
     return conn
 
 def init_db():
-    with get_conn() as conn:
+    with get_conn as conn:
         conn.executescript(SCHEMA_SQL.read_text())
