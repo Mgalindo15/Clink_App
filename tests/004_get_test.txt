@@ -1,0 +1,14 @@
+http :8000/profiles
+# Success
+
+http :8000/profiles age_band==18_25 limit==2
+# Success
+
+http :8000/profiles education_level==graduate_school
+# Success
+
+http :8000/profiles/1/history
+# Success
+
+http :8000/profiles/1/debug
+# Success
