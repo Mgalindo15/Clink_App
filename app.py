@@ -54,17 +54,17 @@ def get_current_user(
 ) -> str:
     token: str | None = None
 
-    # 1) Prefer explicit OAuth2 bearer (if provided)
+    # prefer explicit oauth bearer
     if token_from_oauth:
         token = token_from_oauth
 
-    # 2) Else parse Authorization header
+    # else parse auth header
     if not token and authorization:
         scheme, param = get_authorization_scheme_param(authorization)
         if scheme.lower() == "bearer" and param:
             token = param
 
-    # 3) Else fall back to cookie
+    # else fall back to cookie
     if not token:
         token = request.cookies.get("access_token")
 
