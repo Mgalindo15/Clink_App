@@ -9,9 +9,9 @@ from jose import jwt, JWTError
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, TypedDict
 from db import init_db, get_conn
-from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, UserCreate, UserLogin, TokenOut, compute_age_band, utc_now_iso
+from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, AdminToggle, UserCreate, UserLogin, TokenOut, compute_age_band, utc_now_iso
 
-# ----- DB INIT -----
+# ----- DB INIT ----- #
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- startup ---
@@ -26,13 +26,13 @@ app = FastAPI(title="Clink Lab", version="0.0.1", lifespan=lifespan)
 def health():
     return {"status": "ok", "ts": datetime.utcnow().isoformat() + "Z"}
 
-# ----- SECURITY -----
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
-
+# ----- GENERAL SECURITY & VALIDATION ----- #
 SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret") # Check Esmerald WF for PROD
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 120
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
 
 def hash_password(password: str) -> str:
     return pwd_context.hash(password)
@@ -46,13 +46,6 @@ def create_access_token(data: dict, expires_delta: int=ACCESS_TOKEN_EXPIRE_MINUT
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-# ----- PROFILE -----
-class CurrentUser(TypedDict):
-    username: str
-    user_id: int
-    profile_id: int
-    is_admin: bool
-
 def _extract_bearer_from_header(authorization: Optional[str]) -> Optional[str]:
     if not authorization:
         return None
@@ -60,6 +53,13 @@ def _extract_bearer_from_header(authorization: Optional[str]) -> Optional[str]:
     if scheme.lower() == "bearer" and param:
         return param
     return None
+
+# ----- USER IDENTITY & PRIVILEGES ----- #
+class CurrentUser(TypedDict):
+    username: str
+    user_id: int
+    profile_id: int
+    is_admin: bool
 
 def get_current_user(
     request: Request,
@@ -90,7 +90,7 @@ def get_current_user(
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT rowid AS user_id, username, profile_id, is_admin FROM auth_users WHERE username = ?",
+            "SELECT rowid AS user_id, username, auth_profile_id, is_admin FROM auth_users WHERE username = ?",
             (username,),
         )
         row = cur.fetchone()
@@ -99,11 +99,11 @@ def get_current_user(
         return CurrentUser(
             username=row["username"],
             user_id=row["user_id"],
-            profile_id=row["profile_id"],
+            profile_id=row["auth_profile_id"],
             is_admin=bool(row["is_admin"]),
         )
 
-def require_owner_or_Admin(target_profile_id: int, me: CurrentUser) -> None:
+def require_owner_or_admin(target_profile_id: int, me: CurrentUser) -> None:
     if me["is_admin"]:
         return
     if me["profile_id"] == target_profile_id:
@@ -114,7 +114,9 @@ def require_admin(me: CurrentUser) -> None:
     if not me["is_admin"]:
         raise HTTPException(status_code=403, detail="Admin only")
 
-# ----- ROUTES -----
+# ---------- HTTP ROUTES ---------- #
+
+# ---- USER ACTIONS ----- #
 @app.post("/register", response_model=dict)
 def register_user(payload: UserCreate):
     now = utc_now_iso()
@@ -147,7 +149,18 @@ def login_user(payload: UserLogin):
         response = JSONResponse(content={"access_token": token, "token_type": "bearer"})
         response.set_cookie(key="access_token", value=token, httponly=True)
         return response
+    
+@app.post("/logout")
+def logout():
+    resp = JSONResponse({"msg": "logged out"})
+    resp.delete_cookie("access_token")
+    return resp
 
+@app.get("/me")
+def read_me(me: CurrentUser = Depends(get_current_user)):
+    return {"username": me["username"], "profile_id": me["profile_id"], "is_admin": me["is_admin"]}
+
+# ----- PROFILE ACTIONS ----- #
 @app.post("/profiles", response_model=ProfilePublic, status_code=status.HTTP_201_CREATED)
 def create_profile(payload: ProfileCreate):
     if not payload.consent_ok:
@@ -229,53 +242,11 @@ def create_profile(payload: ProfileCreate):
         guardian_required=guardian_required,
     )
 
-@app.get("/me")
-def read_me(me: CurrentUser = Depends(get_current_user)):
-    return {"username": me["username"], "profile_id": me["profile_id"], "is_admin": me["is_admin"]}
-
-@app.get("/profiles", response_model=List[ProfilePublic])
-def list_profiles(
-    age_band: Optional[str] = None,
-    education_level: Optional[str] = None,
-    limit: int = 10,
-    offset: int = 0,
-):
-    query = "SELECT * FROM profiles WHERE 1=1"
-    params = []
-    if age_band:
-        query += " AND age_band = ?"
-        params.append(age_band)
-    if education_level:
-        query += " AND education_level = ?"
-        params.append(education_level)
-    query += " ORDER BY profile_id LIMIT ? OFFSET ?"
-    params.extend([limit, offset])
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(query, params)
-        rows = cur.fetchall()
-
-    return [
-        ProfilePublic(
-            profile_id=row["profile_id"],
-            schema_version=row["schema_version"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-            age_band=row["age_band"],
-            education_level=row["education_level"],
-            employment_status=row["employment_status"],
-            sex=row["sex"],
-            gender=row["gender"],
-            locale=row["locale"],
-            consent_ok=bool(row["consent_ok"]),
-            guardian_required=bool(row["guardian_required"]),
-        )
-        for row in rows
-    ]
-
 @app.get("/profiles/{profile_id}", response_model=ProfilePublic)
-def get_profile(profile_id: int):
+def get_profile(profile_id: int, me: CurrentUser = Depends(get_current_user)):
+    # PULL 1 USER PERSONAL INFORMATION
+    require_owner_or_admin(profile_id, me)
+
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -308,26 +279,20 @@ def get_profile(profile_id: int):
             consent_ok=bool(row["consent_ok"]),
             guardian_required=bool(row["guardian_required"]),
         )
-    
+
 @app.get("/profiles/{profile_id}/pii", response_model=ProfilePII)
-def get_profile_pii(
-    profile_id: int,
-    # --- Validation ---> replace later w/ real auth
-    #x_dev_key: Optional[str] = Header(default=None),
-):
-    """
-    expected = os.environ.get("DEV_PII_KEY", "").strip()
-    if not expected or (x_dev_key or "").strip() != expected:
-        raise HTTPException(status_code=403, detail="PII access denied (missing/invalid dev key).")
-    """
+def get_profile_pii(profile_id: int, me: CurrentUser = Depends(get_current_user)):
+    # PULL 1 USER PRIVATE INFORMATION
+    require_owner_or_admin(profile_id, me)
+    
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT p.profile_id, pr.display_name, pr.dob
-            FROM profiles p
-            JOIN profiles_private pr ON pr.pii_profile_id = p.profile_id
-            WHERE p.profile_id = ?
+            SELECT profile_id, display_name, dob
+            FROM profiles
+            JOIN profiles_private ON pii_profile_id=profile_id
+            WHERE profile_id = ?
             """,
             (profile_id,),
         )
@@ -343,7 +308,11 @@ def get_profile_pii(
         }
     
 @app.put("/profiles/{profile_id}", response_model=ProfilePublic)
-def update_profile(profile_id: int, payload: ProfileUpdate):
+def update_profile(profile_id: int, payload: ProfileUpdate, me: CurrentUser = Depends(get_current_user)):
+    # USER PERSONAL INFORMATION UPDATE FIELDS
+    require_owner_or_admin(profile_id, me)
+
+    # Update any info
     now = utc_now_iso()
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
     if not updates:
@@ -382,11 +351,115 @@ def update_profile(profile_id: int, payload: ProfileUpdate):
 
     # Reuse existing get_profile to return updated object
     return get_profile(profile_id)
-    
 
+@app.patch("/profiles/{profile_id}/pii", response_model=ProfilePII)
+def update_profile_pii(profile_id: int, payload: ProfilePIIUpdate, me: CurrentUser = Depends(get_current_user)):
+    # USER PRIVATE INFORMATION UPDATE FIELDS (WILL NEED ADMIN ONLY FOR ADNMIN TOGGLE)
+    require_owner_or_admin(profile_id, me)
+
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    now = utc_now_iso()
+
+    set_clauses = ", ".join([f"{col} = ?" for col in updates])
+    params = list(updates.values())
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM profiles_private WHERE pii_profile_id = ?", (profile_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="PII record not found.")
+
+        cur.execute(
+            f"UPDATE profiles_private SET {set_clauses} WHERE pii_profile_id = ?",
+            (*params, profile_id),
+        )
+
+        cur.execute(
+            """
+            INSERT INTO evidence_log (log_profile_id, ts, source, delta_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                profile_id,
+                now,
+                "update_profile_pii",
+                json.dumps({"updated": updates}),
+            ),
+        )
+
+        conn.commit()
+
+    # Return updated PII
+    return get_profile_pii(profile_id)
+
+# ----- ADMIN ONLY LOOKUPS ----- #
+@app.patch("/admin/users/{username}/admin", response_model=dict)
+def set_user_admin(username: str, payload: AdminToggle, me: CurrentUser = Depends(get_current_user)):
+    require_admin(me)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE auth_users SET is_admin = ? WHERE username = ?",
+            (1 if payload.is_admin else 0, username),
+        )
+        if cur.rowcount==-0:
+            raise HTTPException(status_code=404, detail="User not found")
+        conn.commit()
+    return {"username": username, "is_admin": payload.is_admin}
+
+@app.get("/profiles", response_model=List[ProfilePublic])
+def list_profiles(
+    age_band: Optional[str] = None,
+    education_level: Optional[str] = None,
+    limit: int = 10,
+    offset: int = 0,
+    me: CurrentUser = Depends(get_current_user)
+):
+    # ADMIN ONLY, PULLS ALL PROFILES INFORMATION
+    require_admin(me)
+
+    query = "SELECT * FROM profiles WHERE 1=1"
+    params = []
+    if age_band:
+        query += " AND age_band = ?"
+        params.append(age_band)
+    if education_level:
+        query += " AND education_level = ?"
+        params.append(education_level)
+    query += " ORDER BY profile_id LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(query, params)
+        rows = cur.fetchall()
+
+    return [
+        ProfilePublic(
+            profile_id=row["profile_id"],
+            schema_version=row["schema_version"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            age_band=row["age_band"],
+            education_level=row["education_level"],
+            employment_status=row["employment_status"],
+            sex=row["sex"],
+            gender=row["gender"],
+            locale=row["locale"],
+            consent_ok=bool(row["consent_ok"]),
+            guardian_required=bool(row["guardian_required"]),
+        )
+        for row in rows
+    ]
 
 @app.get("/profiles/{profile_id}/history", response_model=List[dict])
-def get_profile_history(profile_id: int):
+def get_profile_history(profile_id: int, me: CurrentUser = Depends(get_current_user)):
+    # ADMIN ONLY -- DEBUGGING PROTOCOL, CONTEXT DRIFT ANALYTICS                    
+    require_admin(me)
+
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -411,11 +484,10 @@ def get_profile_history(profile_id: int):
     ]
 
 @app.get("/profiles/{profile_id}/debug", response_model=dict)
-def get_profile_debug(
-    profile_id: int,
-    #dev key
-):
-    # if gating for pii/non-pii split w/ dev key requirement (later)
+def get_profile_debug(profile_id: int, me: CurrentUser = Depends(get_current_user)):
+    # ADMIN FUNCTION ONLY
+    require_admin(me)
+
     out = {}
     out["profile"] = get_profile(profile_id)
 
@@ -447,14 +519,11 @@ def get_profile_debug(
     
     return out
     
-
 @app.get("/profiles/{profile_id}/snapshot", response_model=dict)
-def get_snapshot(profile_id: int, rebuild: bool = False):
-    """
-    Dev-friendly snapshot:
-      - If exists and rebuild==False → return existing
-      - Else (re)build a compact snapshot from the current row
-    """
+def get_snapshot(profile_id: int, rebuild: bool = False, me: CurrentUser = Depends(get_current_user)):
+    # ADMIN ONLY: USER DIRECT REQ --> ADMIN, AUTO-PULL FOR AI COMM (RAG)
+    require_admin(me)
+
     snapshot_type = "chat_snapshot"
     now = utc_now_iso()
 
@@ -532,51 +601,3 @@ def get_snapshot(profile_id: int, rebuild: bool = False):
         }
 
 
-
-@app.patch("/profiles/{profile_id}/pii", response_model=ProfilePII)
-def update_profile_pii(
-    profile_id: int,
-    payload: ProfilePIIUpdate,
-    # x_dev_key: Optional[str] = Header(default=None),
-):
-    # expected = os.environ.get("DEV_PII_KEY", "").strip()
-    # if not expected or (x_dev_key or "").strip() != expected:
-        # raise HTTPException(status_code=403, detail="PII access denied (missing/invalid dev key).")
-
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
-    if not updates:
-        raise HTTPException(status_code=400, detail="No fields to update.")
-
-    now = utc_now_iso()
-
-    set_clauses = ", ".join([f"{col} = ?" for col in updates])
-    params = list(updates.values())
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM profiles_private WHERE pii_profile_id = ?", (profile_id,))
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="PII record not found.")
-
-        cur.execute(
-            f"UPDATE profiles_private SET {set_clauses} WHERE pii_profile_id = ?",
-            (*params, profile_id),
-        )
-
-        cur.execute(
-            """
-            INSERT INTO evidence_log (log_profile_id, ts, source, delta_json)
-            VALUES (?, ?, ?, ?)
-            """,
-            (
-                profile_id,
-                now,
-                "update_profile_pii",
-                json.dumps({"updated": updates}),
-            ),
-        )
-
-        conn.commit()
-
-    # Return updated PII
-    return get_profile_pii(profile_id)

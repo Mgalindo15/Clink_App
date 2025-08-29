@@ -23,7 +23,7 @@ EmploymentStatus = Literal[
 ]
 
 # --- FUNCTIONS ---
-def compute_age_band(dob: date) -> AgeBand:
+def compute_age_band(dob: date) -> AgeBand: 
     today = date.today()
 
     years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
@@ -102,6 +102,9 @@ class UserLogin(BaseModel):
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+class AdminToggle(BaseModel):
+    is_admin: bool
 
 class SnapShotOut(BaseModel):
     profile_id: int
