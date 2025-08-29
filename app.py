@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, TypedDict
 from db import init_db, get_conn
 from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, UserCreate, UserLogin, TokenOut, compute_age_band, utc_now_iso
 
@@ -30,8 +30,7 @@ def health():
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login", auto_error=False)
 
-# Check Esmerald WF for PROD
-SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret")
+SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret") # Check Esmerald WF for PROD
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 120
 
@@ -47,41 +46,73 @@ def create_access_token(data: dict, expires_delta: int=ACCESS_TOKEN_EXPIRE_MINUT
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
+# ----- PROFILE -----
+class CurrentUser(TypedDict):
+    username: str
+    user_id: int
+    profile_id: int
+    is_admin: bool
+
+def _extract_bearer_from_header(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
+        return None
+    scheme, param = get_authorization_scheme_param(authorization)
+    if scheme.lower() == "bearer" and param:
+        return param
+    return None
+
 def get_current_user(
     request: Request,
-    authorization: str | None = Header(default=None),
-    token_from_oauth: str | None = Depends(oauth2_scheme),
-) -> str:
-    token: str | None = None
-
-    # prefer explicit oauth bearer
-    if token_from_oauth:
-        token = token_from_oauth
-
-    # else parse auth header
-    if not token and authorization:
-        scheme, param = get_authorization_scheme_param(authorization)
-        if scheme.lower() == "bearer" and param:
-            token = param
-
-    # else fall back to cookie
+    authorization: Optional[str] = Header(default=None),
+    token_from_oauth: Optional[str] = Depends(oauth2_scheme),
+) -> CurrentUser:
+    
+    #1) Prefer 0auth token
+    token = token_from_oauth or _extract_bearer_from_header(authorization)
+    #2) Default to cookie
     if not token:
         token = request.cookies.get("access_token")
 
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
+        raise HTTPException(status_code=401, detail="Not Authenticated")
+    
+    # Attempt decode
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
+    
     username = payload.get("sub")
     if not isinstance(username, str) or not username:
-        # This prevents returning None → {"username": null}
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    # Acc lookup (w/ auth)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT rowid AS user_id, username, profile_id, is_admin FROM auth_users WHERE username = ?",
+            (username,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        return CurrentUser(
+            username=row["username"],
+            user_id=row["user_id"],
+            profile_id=row["profile_id"],
+            is_admin=bool(row["is_admin"]),
+        )
 
-    return username
+def require_owner_or_Admin(target_profile_id: int, me: CurrentUser) -> None:
+    if me["is_admin"]:
+        return
+    if me["profile_id"] == target_profile_id:
+        return
+    raise HTTPException(status_code=403, detail="Forbidden (ownner or admin required)")
+
+def require_admin(me: CurrentUser) -> None:
+    if not me["is_admin"]:
+        raise HTTPException(status_code=403, detail="Admin only")
 
 # ----- ROUTES -----
 @app.post("/register", response_model=dict)
@@ -199,8 +230,8 @@ def create_profile(payload: ProfileCreate):
     )
 
 @app.get("/me")
-def read_users_me(current_user: str = Depends(get_current_user)):
-    return {"username": current_user}
+def read_me(me: CurrentUser = Depends(get_current_user)):
+    return {"username": me["username"], "profile_id": me["profile_id"], "is_admin": me["is_admin"]}
 
 @app.get("/profiles", response_model=List[ProfilePublic])
 def list_profiles(
