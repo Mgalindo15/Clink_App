@@ -33,10 +33,10 @@ CREATE TABLE IF NOT EXISTS profiles (
 
 -- PII Separated
 CREATE TABLE IF NOT EXISTS profiles_private (
-    ppi_profile_id      INTEGER PRIMARY KEY,
+    pii_profile_id      INTEGER PRIMARY KEY,
     display_name        TEXT NOT NULL,
     dob                 TEXT NOT NULL,  -- ISO 'YYYY-MM-DD'
-    FOREIGN KEY(ppi_profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
+    FOREIGN KEY(pii_profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
 
 -- Auth (tri-linked with profiles/private)
@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
     password_hash       TEXT NOT NULL,
     auth_profile_id     INTEGER NOT NULL,
     created_at          TEXT NOT NULL,
+    is_admin            INTEGER NOT NULL DEFAULT 0;
     FOREIGN KEY(auth_profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
 
