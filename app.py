@@ -1,15 +1,20 @@
-import os, json
+import os, json, logging, sqlite3, traceback, time, uuid
 from fastapi import FastAPI, HTTPException, status, Header, Depends, Request
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 from passlib.context import CryptContext
 from jose import jwt, JWTError
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, TypedDict
 from db import init_db, get_conn
-from models import ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, AdminToggle, UserCreate, UserLogin, TokenOut, compute_age_band, utc_now_iso
+from models import ApiError, ProfileCreate, ProfilePublic, ProfilePII, ProfilePIIUpdate, ProfileUpdate, SnapShotOut, AdminToggle, UserCreate, UserLogin, TokenOut, compute_age_band, utc_now_iso
 
 # ----- DB INIT ----- #
 @asynccontextmanager
@@ -21,10 +26,82 @@ async def lifespan(app: FastAPI):
     # blah blah
 
 app = FastAPI(title="Clink Lab", version="0.0.1", lifespan=lifespan)
+logger = logging.getLogger("clink")
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "ts": datetime.utcnow().isoformat() + "Z"}
+    return {"status": "ok", "ts": utc_now_iso()}
+
+# ----- ERROR HANDLERS ----- #
+@app.exception_handler(RequestValidationError)
+async def pydantic_error_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for e in exc.errors():
+        errors.append({"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")})
+    payload = ApiError(status=422, code="validation_error",
+                                detail="Input validation failed", extra={"errors": errors})
+    return JSONResponse(status_code=422, content=payload.model_dump())
+
+@app.exception_handler(sqlite3.IntegrityError)
+async def sqlite_integrity_handler(request: Request, exc: sqlite3.IntegrityError):
+    msg = str(exc)
+    code = "integrity_error"
+    # common cases (non-exhuastive)
+    if "UNIQUE constraint failed" in msg:
+        code, human = "unique_violation", "Unique constraint failed"
+    elif "FOREIGN KEY constraint failed" in msg:
+        code, human = "foreign_key_violation", "Foreign key constraint failed"
+    else:
+        human = "Database integrity error"
+    payload = ApiError(status=400, code=code, detail=human, extra={"db_msg": msg})
+    return JSONResponse(status_code=400, content=payload.model_dump())
+
+@app.exception_handler(sqlite3.OperationalError)
+async def sqlite_operational_handler(request: Request, exc: sqlite3.OperationalError):
+    payload = ApiError(status=500, code="db_operational_error",
+                       detail="Database operational error", extra={"db_msg": str(exc)})
+    return JSONResponse(status_code=500, content=payload.model_dump())
+
+@app.exception_handler(Exception)
+async def handled_handler(request: Request, exc: Exception):
+    #traceback handler/cleanup
+    logger.exception("Unhandled error")
+    payload = ApiError(status=500, code="internal_error",
+                       detail="Internal server error", extra={"db_msg": str(exc)})
+    return JSONResponse(status_code=500, content=payload.model_dump())
+
+# ----- MIDDLEWARE ----- #
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        start = time.perf_counter()
+        # Make request_id available to handlers if needed
+        request.state.request_id = request_id
+        try:
+            response = await call_next(request)
+        finally:
+            dur_ms = round((time.perf_counter() - start) * 1000, 2)
+            # Try to extract current user (if dependency stuck it somewhere)
+            user = getattr(request.state, "username", None)
+            logger.info(
+                "req id=%s method=%s path=%s status=%s dur_ms=%s user=%s",
+                request_id, request.method, request.url.path,
+                getattr(response, "status_code", "n/a"), dur_ms, user
+            )
+        # Propagate the request id back
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+app.add_middleware(RequestContextMiddleware)
+
+# FE API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ----- GENERAL SECURITY & VALIDATION ----- #
 SECRET_KEY = os.environ.get("DEV_JWT_SECRET", "devsecret") # Check Esmerald WF for PROD
@@ -90,16 +167,18 @@ def get_current_user(
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT rowid AS user_id, username, auth_profile_id, is_admin FROM auth_users WHERE username = ?",
+            "SELECT rowid AS user_id, username, auth_profile_id AS profile_id, is_admin FROM auth_users WHERE username = ?",
             (username,),
         )
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=401, detail="Invalid credentials")
+        # push username into EH path for logging
+        request.state.username = username
         return CurrentUser(
             username=row["username"],
             user_id=row["user_id"],
-            profile_id=row["auth_profile_id"],
+            profile_id=row["profile_id"],
             is_admin=bool(row["is_admin"]),
         )
 

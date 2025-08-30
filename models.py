@@ -2,7 +2,7 @@ from datetime import date, datetime, timezone
 from typing import Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
-# --- GLOBALS ---
+# ----- GLOBALS ----- #
 AgeBand = Literal["13_17", "18_25", "26_39", "40_plus"]
 Sex = Literal["male", "female"]
 EducationLevel = Literal[
@@ -22,7 +22,7 @@ EmploymentStatus = Literal[
     "retired",
 ]
 
-# --- FUNCTIONS ---
+# ----- FUNCTIONS ----- #
 def compute_age_band(dob: date) -> AgeBand: 
     today = date.today()
 
@@ -43,7 +43,14 @@ def utc_now_iso() -> str:
     # e.g., "2025-08-24T21:07:12.345Z"
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
-# --- SCHEMAS ---
+# ----- ERROR HANDLING ----- #
+class ApiError(BaseModel):
+    status: int
+    code: str
+    detail: str
+    extra: Optional[Dict[str, Any]] = None
+
+# ----- SCHEMAS ----- #
 class ProfileCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=50)
     dob: date
