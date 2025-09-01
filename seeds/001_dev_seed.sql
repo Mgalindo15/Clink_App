@@ -14,13 +14,13 @@ SELECT
     'student',
     'male',
     NULL,
-    'en-us',
+    'en-US',
     1,
     0
 FROM t;
 
 -- PII row (separate table)
-INSERT INTO profiles_private (ppi_profile_id, display_name, dob)
+INSERT INTO profiles_private (pii_profile_id, display_name, dob)
 VALUES (1, 'Matt Galindo', '1998-12-06');
 
 -- Evidence log: initial creation event

@@ -1,5 +1,5 @@
 import os, json, logging, sqlite3, traceback, time, uuid
-from fastapi import FastAPI, HTTPException, status, Header, Depends, Request
+from fastapi import FastAPI, HTTPException, status, Header, Depends, Request, Body
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi.responses import JSONResponse
@@ -97,7 +97,7 @@ app.add_middleware(RequestContextMiddleware)
 # FE API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -204,10 +204,10 @@ def register_user(payload: UserCreate):
         try:
             cur.execute(
                 """
-                INSERT INTO auth_users (username, password_hash, auth_profile_id, created_at)
+                INSERT INTO auth_users (username, password_hash, auth_profile_id, requested_admin, created_at)
                 VALUES (?, ?, ?, ?)
                 """,
-                (payload.username, hash_password(payload.password), payload.profile_id, now),
+                (payload.username, hash_password(payload.password), payload.profile_id, 1 if payload.requested_admin else 0, now),
             )
             conn.commit()
         except Exception:
@@ -679,4 +679,29 @@ def get_snapshot(profile_id: int, rebuild: bool = False, me: CurrentUser = Depen
             "json": snapshot,
         }
 
+@app.get("/admin/requests", response_model=List[dict])
+def list_admin_requests(limit: int = 50, offset: int = 0, me: CurrentUser = Depends(get_current_user)):
+    require_admin(me)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT user_id, username, auth_profile_id AS profile_id, created_at
+            FROM auth_users
+            WHERE requested_admin = 1 AND is_admin = 0
+            ORDER BY user_id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, offset),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "user_id": r["user_id"],
+            "username": r["username"],
+            "profile_id": r["profile_id"],
+            "created_at": r["created_at"],
+        }
+        for r in rows
+    ]
 

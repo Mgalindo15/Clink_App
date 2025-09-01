@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS auth_users (
     password_hash       TEXT NOT NULL,
     auth_profile_id     INTEGER NOT NULL,
     created_at          TEXT NOT NULL,
+    admin_requested     INTEGER NOT NULL DEFAULT 0,
     is_admin            INTEGER NOT NULL DEFAULT 0,
     FOREIGN KEY(auth_profile_id) REFERENCES profiles(profile_id) ON DELETE CASCADE
 );
