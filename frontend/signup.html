@@ -1,0 +1,188 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Clink Lab — Sign-up</title>
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+    <h1>Sign-up</h1>
+    <p><a href="./index.html">Back to home</a></p>
+
+    <form id="signupForm" class="card">
+        <h2>Create your profile</h2>
+        <label>Full name (req)
+            <input id="display_name" required />
+        </label>
+
+        <label>Date of birth (req)
+            <input id="dob" placeholder="YYYY-MM-DD or MM/DD/YYYY" required />
+        </label>
+
+        <label>Education (req)
+            <select id="education_level" required>
+              <option value="">-- choose --</option>
+              <option value="middle_school">Middle school</option>
+              <option value="high_school">High school</option>
+              <option value="community_college">Community college</option>
+              <option value="trade_school">Trade school</option>
+              <option value="university_or_four_year_college">University (4-year)</option>
+              <option value="graduate_school">Graduate school</option>
+            </select>
+          </label>
+      
+          <label>Employment (optional)
+            <select id="employment_status">
+              <option value="">-- none --</option>
+              <option value="student">Student</option>
+              <option value="unemployed">Unemployed</option>
+              <option value="part_time">Part-time</option>
+              <option value="full_time">Full-time</option>
+              <option value="self_employed">Self-employed</option>
+              <option value="retired">Retired</option>
+            </select>
+          </label>
+      
+          <div>
+            Sex (req):
+            <label><input type="radio" name="sex" value="male" required /> male</label>
+            <label><input type="radio" name="sex" value="female" /> female</label>
+          </div>
+      
+          <label>Gender (optional)
+            <input id="gender" />
+          </label>
+      
+          <label>Country (req)
+            <select id="country" required>
+              <option value="">-- choose --</option>
+              <option value="US">United States</option>
+              <option value="CA">Canada</option>
+              <option value="GB">United Kingdom</option>
+              <option value="AU">Australia</option>
+            </select>
+          </label>
+      
+          <label>
+            <input type="checkbox" id="consent_ok" required />
+            I consent to processing (required)
+          </label>
+
+          <div id="guardianBlock" style="display:none">
+            <p class="small"><strong>Guardian verification required.</strong> (Demo placeholder) Upload any file to continue.</p>
+            <input type="file" id="guardian_file" />
+        </div>
+
+        <h3>Account (auth)</h3>
+        <label>Username (req, ≥6)
+          <input id="username" required minlength="6" />
+        </label>
+        <label>Password (req, ≥8)
+          <input id="password" type="password" required minlength="8" />
+        </label>
+
+        <button type="submit">Submit</button>
+        <div id="msg" class="small"></div>
+    </form>
+    <script>
+        import { Api } from "./js/api.js";
+        import { normalizeDobInput, localeForCountry } from "./js/utils.js";
+
+        const form = document.getElementById("signupForm");
+        const msg = document.getElementById("msg");
+        const dobInput = document.getElementById("dob");
+        const guardianBlock = document.getElementById("guardianBlock");
+        const guardianFile = document.getElementById("guardian_file");
+
+        // if age < 18, show guardian section
+        dobInput.addEventListener("change", () => {
+            try {
+                const iso = normalizeDobInput(dobInput.value);
+                const d = new Date(iso + "T00:00:00Z");
+                const today = new Date();
+                let age = today.getUTCFullYear() - d.getUTCFullYear();
+                const m = today.getUTCMonth() - d.getUTCMonth();
+                if (m < 0 || (m === 0 && today.getUTCDate() < d.getUTCDate())) age--;
+                guardianBlock.style.display = (age < 18) ? "block" : "none";
+            } catch {
+                guardianBlock.style.display = "none";
+            }
+            });
+        
+        form.addEventListener("submit", async (e) => {
+            e.preventDeffault();
+            msg.textContent = "Submitting...";
+
+            const display_name = document.getElementById("display_name").value.trim();
+      const dobRaw = document.getElementById("dob").value.trim();
+      const education_level = document.getElementById("education_level").value;
+      const employment_status = document.getElementById("employment_status").value || null;
+      const sex = (new FormData(form)).get("sex");
+      const gender = document.getElementById("gender").value.trim() || null;
+      const country = document.getElementById("country").value;
+      const consent_ok = document.getElementById("consent_ok").checked;
+
+      const username = document.getElementById("username").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        if (!display_name || !dobRaw || !education_level || !sex || !country || !consent_ok) {
+          throw new Error("Please complete all required fields.");
+        }
+
+        const dob = normalizeDobInput(dobRaw);
+        const locale = localeForCountry(country);
+
+        if (guardianBlock.style.display === "block" && !(guardianFile.files?.length)) {
+          throw new Error("Guardian verification file required for under-18.");
+        }
+
+        // create profile
+        const profilePayload = {
+          display_name, dob,
+          education_level,
+          employment_status,
+          sex,
+          gender,
+          locale,
+          consent_ok
+        };
+        const profile = await Api.createProfile(profilePayload);
+
+        // 2) register user
+        await fetch("http://localhost:8000/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            username,
+            password,
+            profile_id: profile.profile_id
+          })
+        }).then(async r => {
+          if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+        });
+
+        // auto-login
+        await fetch("http://localhost:8000/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ username, password })
+        });
+
+        // temp gated route for admin/normal user
+        const me = await Api.me();
+        if (me.is_admin) {
+          window.location.href = "./admin.html";
+        } else {
+          msg.textContent = `Success! Account created for ${me.username}. You can now use the home page login (if needed).`;
+          setTimeout(()=> window.location.href="./index.html", 1200);
+        }
+      } catch (err) {
+        msg.textContent = "Error: " + err.message;
+      }
+    });  
+    </script>
+</body>
+</html>

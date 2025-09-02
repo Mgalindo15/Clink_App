@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Clink Lab — Admin</title>
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+    <h1>Admin Panel</h1>
+    <p><a href="./index.html">Home</a></p>
+
+    <div class="card" id="whoami"></div>
+
+    <div class="card">
+        <h2>Profiles</h2>
+        <div class="row">
+            <label>Age band
+                <select id="filter_age">
+                    <option value="">(any)</option>
+                    <option value="13_17">13–17</option>
+                    <option value="18_25">18–25</option>
+                    <option value="26_39">26–39</option>
+                    <option value="40_plus">40+</option>
+                </select>
+            </label>
+            <label>Education
+                <select id="filter_edu">
+                    <option value="">(any)</option>
+                    <option value="middle_school">Middle school</option>
+                    <option value="high_school">High school</option>
+                    <option value="community_college">Community college</option>
+                    <option value="trade_school">Trade school</option>
+                    <option value="university_or_four_year_college">University (4-year)</option>
+                    <option value="graduate_school">Graduate school</option>
+                </select>
+            </label>
+            <button id="loadBtn">Load</button>
+        </div>
+
+        <table id="profilesTbl">
+            <thead>
+                <tr>
+                    <th>ID</th><th>Age</th><th>Edu</th><th>Sex</th><th>Locale</th><th>PII</th><th>History</th><th>Snapshot</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>Detail</h2>
+        <pre id="detail"></pre>
+    </div>
+
+    <script type="module">
+        import { requiredAdminOrRedirect } from "./js/auth.js";
+        import { Api } from "./js/api.js";
+        import { renderJSON } from "./js/utils.js";
+
+        const me = await requireAdminOrRedirect();
+        if (!me) throw new Error("not admin or not logged in");
+        const who = document.getElementById("whoami");
+        who.textContent = `Logged in as: ${me.username} (admin)`;
+
+        const tbody = document.querySelector("#profilesTbl tbody");
+        const detail = document.getElementById("detail");
+
+        async function loadProfiles() {
+            tbody.innerHTML = "<tr><td colspan='8'>Loading…</td></tr>";
+            const age_band = document.getElementById("filter_age").value || undefined;
+            const education_level = document.getElementById("filter_edu").value || undefined;
+            try {
+                const rows = await Api.listProfiles({ age_band, education_level, limit: 50, offset: 0 });
+                if (!rows.length) {
+                tbody.innerHTML = "<tr><td colspan='8'>(no results)</td></tr>";
+                return;
+                }
+                tbody.innerHTML = "";
+                for (const r of rows) {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td>${r.profile_id}</td>
+                    <td>${r.age_band}</td>
+                    <td>${r.education_level}</td>
+                    <td>${r.sex}</td>
+                    <td>${r.locale}</td>
+                    <td><button data-action="pii" data-id="${r.profile_id}">View PII</button></td>
+                    <td><button data-action="hist" data-id="${r.profile_id}">History</button></td>
+                    <td><button data-action="snap" data-id="${r.profile_id}">Snapshot</button></td>
+                `;
+                tbody.appendChild(tr);
+                }
+            } catch (e) {
+                tbody.innerHTML = `<tr><td colspan='8'>Error: ${e.message}</td></tr>`;
+            }
+            }
+
+        document.getElementById("loadBtn").addEventListener("click", loadProfiles);
+        tbody.addEventListener("click", async (e) => {
+            const btn = e.target.closest("button");
+            if (!btn) return;
+            const id = btn.getAttribute("data-id");
+            const action = btn.getAttribute("data-action");
+            try {
+                if (action === "pii") {
+                const pii = await Api.getPII(id);
+                renderJSON(detail, pii);
+                } else if (action === "hist") {
+                const hist = await Api.history(id);
+                renderJSON(detail, hist);
+                } else if (action === "snap") {
+                const snap = await Api.snapshot(id, false);
+                renderJSON(detail, snap);
+                }
+            } catch (err) {
+                detail.textContent = "Error: " + err.message;
+            }
+        });
+
+        // initial load
+        loadProfiles();
+    </script>
+</body>
+</html>
