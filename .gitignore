@@ -6,4 +6,5 @@ clink-db-wal
 notes.txt
 token.txt
 .webui_secret_key
-slink-db
+slink-
+commands.txt
