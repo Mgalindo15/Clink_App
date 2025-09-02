@@ -484,7 +484,7 @@ def set_user_admin(username: str, payload: AdminToggle, me: CurrentUser = Depend
             "UPDATE auth_users SET is_admin = ? WHERE username = ?",
             (1 if payload.is_admin else 0, username),
         )
-        if cur.rowcount==-0:
+        if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="User not found")
         conn.commit()
     return {"username": username, "is_admin": payload.is_admin}

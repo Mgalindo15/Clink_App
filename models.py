@@ -99,7 +99,7 @@ class ProfilePIIUpdate(BaseModel):
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=6, max_length=30)
-    password: str = Field(min_Length=8, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     requested_admin: bool = False
     profile_id: int
 

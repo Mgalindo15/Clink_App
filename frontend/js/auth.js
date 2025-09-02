@@ -19,7 +19,7 @@ export async function requireAdminOrRedirect() {
         const me = await Api.me();
         // not admin --> redirect
         if (!me.is_admin) {
-            alert("Amin only.");
+            alert("Admin only.");
             window.location.href = "/index.html";
             return null;
         }

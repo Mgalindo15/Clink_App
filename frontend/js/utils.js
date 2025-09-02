@@ -20,12 +20,12 @@ export function localeForCountry(countryCode) {
         US: "en-US",
         CA: "en-CA",
         GB: "en-GB",
-        A: "en-AU",
+        AU: "en-AU",
     };
     return map[countryCode] ?? "en-US";
 }
 
 // JSON drop, pretty print
 export function renderJSON(el, obj) {
-    el.textContent = JSON.stringinfy(obj, null, 2);
+    el.textContent = JSON.stringify(obj, null, 2);
 }

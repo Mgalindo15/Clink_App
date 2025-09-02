@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS profiles (
                             CHECK (employment_status IN (
                                 'student',
                                 'unemployed',
-                                'part-time',
-                                'full-time',
-                                'self-employed',
+                                'part_time',
+                                'full_time',
+                                'self_employed',
                                 'retired'
                             )),
     sex                 TEXT NOT NULL CHECK (sex IN ('male', 'female')),

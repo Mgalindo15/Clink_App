@@ -1,16 +1,16 @@
 const BASE_URL = "http://localhost:8000";
 
-async function apiFetch(path, { method = "GET", headers = {}, body, auth = False } = {}) {
+async function apiFetch(path, { method = "GET", headers = {}, body, auth = false } = {}) {
     const opts = {
         method,
-        headers: { " Content-Type": "application/json", ...headers },
-        credentials: "include",     // send/rec cookies
+        headers: { "Content-Type": "application/json", ...headers },
+        credentials: "include", // send/receive cookies
     };
-    if (body !== underfined) opts.body = JSON.stringify(body);
+    if (body !== undefined) opts.body = JSON.stringify(body);
 
-// if (auth && window.localStorage.getItem("access_token")) {
-//      opts.headers.Authorization = "Bearer " + window.localStorage.getItem("access_token");
-// }
+    // if (auth && window.localStorage.getItem("access_token")) {
+    //   opts.headers.Authorization = "Bearer " + window.localStorage.getItem("access_token");
+    // }
 
     const res = await fetch(`${BASE_URL}${path}`, opts);
     const text = await res.text();
@@ -24,7 +24,7 @@ async function apiFetch(path, { method = "GET", headers = {}, body, auth = False
 }
 
 export const Api = {
-    health: () => ApiFetch("/health"),
+    health: () => apiFetch("/health"),
     login: (username, password) => apiFetch("/login", { method: "POST", body: { username, password } }),
     logout: () => apiFetch("/logout", { method: "POST" }),
     me: () => apiFetch("/me"),
@@ -33,15 +33,15 @@ export const Api = {
     getProfile: (id) => apiFetch(`/profiles/${id}`),
     getPII: (id) => apiFetch(`/profiles/${id}/pii`),
     updatePII: (id, patch) => apiFetch(`/profiles/${id}/pii`, { method: "PATCH", body: patch }),
-    listProfiles: (q={}) => {
-        // built in js api -- parses query strings
+    listProfiles: (q = {}) => {
         const params = new URLSearchParams();
         if (q.age_band) params.set("age_band", q.age_band);
         if (q.education_level) params.set("education_level", q.education_level);
         params.set("limit", q.limit ?? 25);
         params.set("offset", q.offset ?? 0);
-        return apFetch(`/profiles?${params.toString()}`);
+        return apiFetch(`/profiles?${params.toString()}`);
     },
     history: (id) => apiFetch(`/profiles/${id}/history`),
-    snapshot: (id, rebuild=false) => apiFetch(`/profiles/${id}/snapshot${rebuild ? "?rebuild=true" : ""}`),
+    snapshot: (id, rebuild = false) => apiFetch(`/profiles/${id}/snapshot${rebuild ? "?rebuild=true" : ""}`),
 };
+
