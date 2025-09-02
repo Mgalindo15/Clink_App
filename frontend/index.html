@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+ <head>
+    <meta charset="utf-8">
+    <meta name="description" content="Clink App">
+    <meta name="keywords" content="AI, Social Meida, Personality Test">
+    <meta name="author" content="Matt Galindo">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clink Lab -- Home</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+   <h1>Clink Lab</h1>
+   <p><a href="./signup.html">Go to sign-up</a></p>
+
+   <div class="card">
+      <h2>Amin login</h2>
+      <div class="row">
+         <label>Username <input id="username" autocomplete="username" /></label>
+         <label>Password <input id="password" type="password" autocomplete="current-password" /></label>
+      </div>
+      <button id="loginBtn">Login</button>
+      <div id="loginMsg" class="small"></div>
+   </div>
+
+   <script type="module">
+      import { loginFlow } from "./js/auth.js";
+      import { Api } from "./js/api.js";
+
+      document.getElementById("loginBtn").addEventListener("click", async () => {
+         const u = document.getElementById("username").value.trim();
+         const p = document.getElementById("password").value;
+         const msg = document.getElementById("loginMsg");
+         msg.tetContent = "Logging in...";
+         try {
+            await loginFlow(u, p);
+            const me = await Api.me();
+            if (me.is_admin) {
+               window.location.href = "./admin.html";
+            } else {
+               msg.textContent = `Logged in as ${me.username} (non-admin).`;
+            }
+         } catch (e) {
+            msg.textContent = "Login failed: " + e.message;
+         }
+      });
+   </script>
+</body>
+</html>
